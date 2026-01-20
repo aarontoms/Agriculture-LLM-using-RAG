@@ -32,45 +32,56 @@ except Exception as e:
 
 embedder = SentenceTransformer("all-MiniLM-L6-v2")
 
-INSTRUCTION = """You are a helpful agricultural assistant.
+import base64
+
+INSTRUCTION = """You are a helpful and jolly agricultural assistant named AgrowBot.
 
 Core rules:
 - Answer the question using the provided context whenever possible.
 - Prefer Kerala-specific agricultural practices, crop varieties, pest control methods, climate, soil, and farming recommendations when they appear in the context.
 - If Kerala-specific information is present, do not replace it with general or global practices.
 
-Context handling:
-- If the provided context is incomplete, weak, or partially relevant, still attempt a useful answer using general agricultural knowledge.
-- Never refuse an answer solely because the context is insufficient or missing.
-- Make reasonable agricultural assumptions when needed and provide practical, field-ready guidance.
-
 Relevance handling:
 - Treat any question that can reasonably relate to agriculture, farming, crops, soil, climate, irrigation, pests, fertilizers, livestock, tools, weather, or rural livelihood as agricultural.
 - Only classify a question as non-agricultural if it is clearly and completely unrelated (for example: movies, programming, politics, celebrities).
 
 Refusal rule (strict and last-resort):
-- Respond with exactly:
-  "I am sorry, I don't have the information to answer that question."
-  only if the question is clearly unrelated to agriculture or farming and cannot be reasonably interpreted in an agricultural context.
+- Respond with exactly: "I am sorry, I don't have the information to answer that question." only if clearly unrelated.
 
-Response style:
-- Answer in 2-3 short points only.
-- Be concise and direct.
-- No introductions, no explanations, no conclusions.
-- Use short phrases if helpful.
+Tone and Style:
+- Be cheerful, happy, and encouraging!
+- Answer in very few direct words (max 2-3 short sentences).
+- No standard intros/outros.
 - Do not use markdown, bullets, numbering, or asterisks.
 
-Greeting handling:
-- If the user greets (hi, hello, etc.), reply with a short greeting and ask how you can help with agriculture or farming.
+Greeting:
+- If greeted, respond happily and ask how you can help with farming today!
 """
 
-# Create Assistant
+# ... (Previous assistant creation code remains similar, updated instructions used) ...
 assistant = client.beta.assistants.create(
-    name="Agri Assistant",
+    name="AgrowBot",
     instructions=INSTRUCTION,
     model="gpt-4o",
 )
 print(f"Assistant created with ID: {assistant.id}")
+
+def generate_audio(text, voice="alloy"):
+    """
+    Generates audio using OpenAI TTS-1 (Standard) and returns base64 string.
+    """
+    try:
+        response = client.audio.speech.create(
+            model="tts-1",
+            voice=voice,
+            input=text
+        )
+        # Convert binary audio to base64 for easy transport in JSON
+        audio_b64 = base64.b64encode(response.content).decode("utf-8")
+        return audio_b64
+    except Exception as e:
+        print(f"TTS Error: {e}")
+        return None
 
 def contextualize_question(question, session_id):
     """
@@ -118,6 +129,7 @@ def contextualize_question(question, session_id):
         print(f"Error contextualizing: {e}")
         return question
 
+
 def retrieve_context(question, k=3):
     try:
         q_emb = embedder.encode([question])
@@ -138,14 +150,14 @@ def chat():
     data = request.json
     question = data.get("question")
     session_id = data.get("session_id")
+    # Default to 'alloy' if not provided
+    voice = data.get("voice", "alloy")
 
     if not question:
         return jsonify({"error": "Question is required"}), 400
 
     search_query = contextualize_question(question, session_id)
-
     context = retrieve_context(search_query)
-
     user_content = f"Context:\n{context}\n\nQuestion:\n{question}"
 
     try:
@@ -188,9 +200,13 @@ def chat():
         
         answer = answer.replace("*", "").strip()
 
+        # Generate Audio
+        audio_b64 = generate_audio(answer, voice=voice)
+
         return jsonify({
             "answer": answer,
-            "session_id": session_id
+            "session_id": session_id,
+            "audio": audio_b64
         })
 
     except Exception as e:
