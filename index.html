@@ -3,420 +3,482 @@
 
 <head>
   <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>AgrowBot 🌱</title>
-  <link rel="preconnect" href="https://fonts.googleapis.com">
-  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+  <title>AgriBot | Expressive AI</title>
+  <!-- GSAP for smooth, high-performance animations -->
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/gsap/3.12.2/gsap.min.js"></script>
   <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;600&display=swap" rel="stylesheet">
   <style>
     :root {
-      --primary-green: #2ecc71;
-      --dark-green: #27ae60;
-      --earth-brown: #795548;
-      --soft-bg: #e8f5e9;
-      /* Light Mint */
-      --text-dark: #2c3e50;
-      --accent-blue: #3498db;
-      --white: #ffffff;
+      /* Modified to less glowy background and BLUE accent */
+      --bg-color: #050a10;
+      --eye-color: #3d89fc;
+      /* Vibrant Blue */
+      --eye-glow: rgba(61, 137, 252, 0.2);
+      --text-color: #e0e0e0;
     }
 
-    body {
+    * {
       margin: 0;
       padding: 0;
-      background: linear-gradient(135deg, #e8f5e9 0%, #c8e6c9 100%);
+      box-sizing: border-box;
+      -webkit-tap-highlight-color: transparent;
+    }
+
+    body,
+    html {
+      width: 100%;
+      height: 100%;
+      overflow: hidden;
+      /* Updated background: darker, less glowy */
+      background: radial-gradient(circle at center, #0a1a2e 0%, #050a10 100%);
       font-family: 'Outfit', sans-serif;
-      color: var(--text-dark);
       display: flex;
-      justify-content: center;
+      flex-direction: column;
+      justify-content: flex-start;
+      /* Move content towards top */
       align-items: center;
-      min-height: 100vh;
     }
 
-    .main-card {
-      background: rgba(255, 255, 255, 0.85);
-      backdrop-filter: blur(12px);
-      border-radius: 24px;
-      box-shadow: 0 10px 30px rgba(46, 204, 113, 0.15);
-      width: 90%;
-      max-width: 450px;
-      padding: 30px;
-      text-align: center;
-      border: 1px solid rgba(255, 255, 255, 0.5);
-    }
-
-    h1 {
-      font-weight: 600;
-      color: var(--dark-green);
-      margin-bottom: 5px;
-      margin-top: 0;
-    }
-
-    .subtitle {
-      color: #666;
-      font-size: 0.9rem;
-      margin-bottom: 25px;
-    }
-
-    /* Robot Styles */
-    .robot-container {
-      height: 140px;
-      display: flex;
-      justify-content: center;
-      align-items: center;
-      margin-bottom: 20px;
-    }
-
-    .robot {
-      width: 120px;
-      height: 120px;
-      border-radius: 50%;
-      background: white;
-      /* Clean white face */
-      border: 4px solid var(--primary-green);
-      display: flex;
-      justify-content: center;
-      align-items: center;
-      transition: all 0.3s cubic-bezier(0.68, -0.55, 0.27, 1.55);
-      box-shadow: 0 5px 15px rgba(46, 204, 113, 0.2);
+    /* The Bot Face Container */
+    #bot-container {
       position: relative;
-    }
-
-    .robot::after {
-      content: '🌱';
-      position: absolute;
-      top: -15px;
-      right: -5px;
-      font-size: 24px;
-      animation: float 3s ease-in-out infinite;
-    }
-
-    @keyframes float {
-
-      0%,
-      100% {
-        transform: translateY(0);
-      }
-
-      50% {
-        transform: translateY(-5px);
-      }
-    }
-
-    .robot.thinking {
-      box-shadow: 0 0 0 8px rgba(255, 213, 79, 0.4);
-      background: #fff9c4;
-      animation: spin 2s linear infinite;
-      border-color: #fbc02d;
-    }
-
-    .robot.talking {
-      animation: bounce 0.5s infinite alternate;
-      border-color: var(--accent-blue);
-    }
-
-    .face {
+      width: 100vw;
+      height: 55vh;
+      /* Occupy top ~55% of screen to keep eyes high */
       display: flex;
-      gap: 15px;
+      justify-content: center;
+      align-items: center;
+      cursor: pointer;
+      padding-top: 40px;
+    }
+
+    .eyes-wrapper {
+      display: flex;
+      gap: 120px;
+      perspective: 1000px;
     }
 
     .eye {
-      width: 16px;
-      height: 16px;
-      background: var(--text-dark);
-      border-radius: 50%;
       position: relative;
+      width: 180px;
+      height: 220px;
+      background: #080808;
+      border-radius: 50% 50% 45% 45%;
+      overflow: hidden;
+      border: 2px solid rgba(61, 137, 252, 0.15);
+      box-shadow: 0 0 20px rgba(0, 0, 0, 0.6);
+      /* Reduced shadow glow */
     }
 
-    .eye::after {
-      content: '';
+    .pupil {
       position: absolute;
-      top: 3px;
-      right: 3px;
-      width: 5px;
-      height: 5px;
-      background: white;
-      border-radius: 50%;
+      top: 50%;
+      left: 50%;
+      width: 100px;
+      height: 130px;
+      background: var(--eye-color);
+      border-radius: 40% 40% 45% 45%;
+      transform: translate(-50%, -50%);
+      box-shadow: 0 0 15px var(--eye-glow), inset 0 0 15px rgba(255, 255, 255, 0.4);
+      transition: width 0.3s, height 0.3s;
     }
 
-    @keyframes bounce {
-      from {
-        transform: scale(1);
-      }
-
-      to {
-        transform: scale(1.05);
-      }
+    .lid {
+      position: absolute;
+      width: 120%;
+      height: 100%;
+      background: var(--bg-color);
+      left: -10%;
+      z-index: 2;
     }
 
-    @keyframes spin {
-      from {
-        transform: rotate(0deg);
-      }
-
-      to {
-        transform: rotate(360deg);
-      }
+    .lid-top {
+      top: -100%;
     }
 
-    /* Chat Area */
-    .chat-window {
-      min-height: 150px;
-      max-height: 300px;
-      /* Scrollable if long */
-      overflow-y: auto;
-      text-align: left;
-      margin-top: 10px;
-      padding: 10px;
-      display: flex;
-      flex-direction: column;
-      gap: 12px;
-      font-size: 0.95rem;
+    .lid-bottom {
+      bottom: -100%;
     }
 
-    .user-msg {
-      background: var(--primary-green);
-      color: white;
-      padding: 12px 16px;
-      border-radius: 18px 18px 0 18px;
-      align-self: flex-end;
-      box-shadow: 0 2px 5px rgba(46, 204, 113, 0.2);
-      max-width: 80%;
-      animation: slideInRight 0.3s ease;
-    }
-
-    .bot-msg {
-      background: #f1f8e9;
-      color: var(--text-dark);
-      padding: 12px 16px;
-      border-radius: 18px 18px 18px 0;
-      align-self: flex-start;
-      max-width: 90%;
-      border: 1px solid #dcedc8;
-      animation: slideInLeft 0.3s ease;
-    }
-
-    .thinking-text {
-      font-style: italic;
-      color: #f9a825;
-      font-size: 0.9rem;
-    }
-
-    @keyframes slideInRight {
-      from {
-        opacity: 0;
-        transform: translateX(10px);
-      }
-
-      to {
-        opacity: 1;
-        transform: translateX(0);
-      }
-    }
-
-    @keyframes slideInLeft {
-      from {
-        opacity: 0;
-        transform: translateX(-10px);
-      }
-
-      to {
-        opacity: 1;
-        transform: translateX(0);
-      }
-    }
-
-    /* Controls */
-    .controls-area {
-      margin-top: 30px;
+    /* Overlay UI */
+    #ui-overlay {
+      position: absolute;
+      bottom: 40px;
+      width: 100%;
       display: flex;
       flex-direction: column;
       align-items: center;
       gap: 15px;
+      z-index: 10;
+      pointer-events: none;
     }
 
-    .mic-btn {
-      width: 70px;
-      height: 70px;
-      border-radius: 50%;
-      border: none;
-      background: var(--primary-green);
-      color: white;
-      font-size: 28px;
-      cursor: pointer;
-      box-shadow: 0 4px 15px rgba(46, 204, 113, 0.4);
-      transition: all 0.3s ease;
+    #status-text {
+      color: var(--eye-color);
+      font-size: 1rem;
+      letter-spacing: 2px;
+      text-transform: uppercase;
+      opacity: 0.5;
+      font-weight: 300;
+    }
+
+    /* Updated Response Container: Bounded height & scrollable */
+    #response-container {
+      max-width: 700px;
+      width: 85%;
+      max-height: 250px;
+      /* Fixed boundary */
+      overflow-y: auto;
+      /* Scrollable */
+      background: rgba(255, 255, 255, 0.04);
+      backdrop-filter: blur(15px);
+      padding: 25px;
+      border-radius: 20px;
+      border: 1px solid rgba(255, 255, 255, 0.08);
+      color: var(--text-color);
+      text-align: center;
+      font-size: 1.15rem;
+      line-height: 1.6;
+      display: none;
+      box-shadow: 0 10px 40px rgba(0, 0, 0, 0.4);
+      pointer-events: auto;
+      scrollbar-width: thin;
+      scrollbar-color: var(--eye-color) transparent;
+    }
+
+    #response-container::-webkit-scrollbar {
+      width: 4px;
+    }
+
+    #response-container::-webkit-scrollbar-track {
+      background: transparent;
+    }
+
+    #response-container::-webkit-scrollbar-thumb {
+      background: var(--eye-color);
+      border-radius: 10px;
+    }
+
+    .input-bar {
+      pointer-events: auto;
       display: flex;
-      justify-content: center;
+      gap: 10px;
+      background: rgba(255, 255, 255, 0.06);
+      padding: 10px 20px;
+      border-radius: 40px;
+      border: 1px solid rgba(255, 255, 255, 0.1);
+      transition: all 0.3s;
+    }
+
+    .input-bar:focus-within {
+      background: rgba(255, 255, 255, 0.12);
+      border-color: var(--eye-color);
+    }
+
+    input {
+      background: transparent;
+      border: none;
+      color: white;
+      outline: none;
+      width: 300px;
+      font-size: 1rem;
+      font-family: inherit;
+    }
+
+    button {
+      background: transparent;
+      border: none;
+      color: var(--eye-color);
+      cursor: pointer;
+      font-size: 1.2rem;
+      display: flex;
       align-items: center;
+      justify-content: center;
+      transition: transform 0.2s;
     }
 
-    .mic-btn:hover {
-      transform: scale(1.1);
-      background: var(--dark-green);
+    button:hover {
+      transform: scale(1.2);
     }
 
-    .mic-btn.listening {
-      background: #e74c3c;
-      animation: pulse-red 1.5s infinite;
+    #mic-btn.listening {
+      color: #ff4d4d;
+      animation: pulse-mic 1s infinite;
     }
 
-    @keyframes pulse-red {
+    @keyframes pulse-mic {
       0% {
-        box-shadow: 0 0 0 0 rgba(231, 76, 60, 0.7);
+        transform: scale(1);
       }
 
-      70% {
-        box-shadow: 0 0 0 15px rgba(231, 76, 60, 0);
+      50% {
+        transform: scale(1.3);
       }
 
       100% {
-        box-shadow: 0 0 0 0 rgba(231, 76, 60, 0);
+        transform: scale(1);
       }
     }
 
-    .new-chat-btn {
-      background: transparent;
-      color: #7f8c8d;
-      border: 1px solid #bdc3c7;
-      padding: 8px 20px;
-      border-radius: 20px;
-      font-size: 14px;
-      cursor: pointer;
-      transition: all 0.2s;
-      font-family: 'Outfit', sans-serif;
-    }
+    /* Tablet Responsive adjustments */
+    @media (max-width: 768px) {
+      .eyes-wrapper {
+        gap: 60px;
+      }
 
-    .new-chat-btn:hover {
-      background: #f7f9f9;
-      border-color: #95a5a6;
-      color: var(--text-dark);
-    }
+      .eye {
+        width: 140px;
+        height: 180px;
+      }
 
-    /* Scrollbar */
-    .chat-window::-webkit-scrollbar {
-      width: 6px;
-    }
+      .pupil {
+        width: 80px;
+        height: 110px;
+      }
 
-    .chat-window::-webkit-scrollbar-track {
-      background: transparent;
-    }
+      #response-container {
+        max-height: 200px;
+        font-size: 1rem;
+      }
 
-    .chat-window::-webkit-scrollbar-thumb {
-      background: #dce775;
-      border-radius: 3px;
+      #bot-container {
+        height: 45vh;
+      }
     }
   </style>
 </head>
 
 <body>
 
-  <div class="main-card">
-    <header>
-      <h1>AgrowBot</h1>
-      <span class="subtitle">Your Smart Farming Companion</span>
-    </header>
-
-    <div class="robot-container">
-      <div class="robot" id="robot">
-        <div class="face">
-          <div class="eye"></div>
-          <div class="eye"></div>
-        </div>
+  <div id="bot-container">
+    <div class="eyes-wrapper">
+      <div class="eye left-eye">
+        <div class="lid lid-top"></div>
+        <div class="pupil"></div>
+        <div class="lid lid-bottom"></div>
+      </div>
+      <div class="eye right-eye">
+        <div class="lid lid-top"></div>
+        <div class="pupil"></div>
+        <div class="lid lid-bottom"></div>
       </div>
     </div>
+  </div>
 
-    <div class="chat-window">
-      <div class="bot-msg" id="botMsg">
-        <strong>AgrowBot:</strong> Hi there! 🌾 Ask me anything about crops, soil, or farming.
-      </div>
-      <div class="user-msg" id="userMsg" style="display:none"></div>
-    </div>
-
-    <div class="controls-area">
-      <button class="mic-btn" id="mic" title="Tap to Speak">🎤</button>
-      <button class="new-chat-btn" id="newChat">Start New Topic</button>
+  <div id="ui-overlay">
+    <div id="status-text">Idle</div>
+    <div id="response-container"></div>
+    <div class="input-bar">
+      <input type="text" id="text-input" placeholder="Ask AgriBot something...">
+      <button id="mic-btn">🎤</button>
+      <button id="send-btn">➔</button>
     </div>
   </div>
 
   <script>
-    const micBtn = document.getElementById("mic");
-    const newChatBtn = document.getElementById("newChat");
-    const robot = document.getElementById("robot");
-    const userMsg = document.getElementById("userMsg");
-    const botMsg = document.getElementById("botMsg");
-
-    const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
-    const recognition = new SpeechRecognition();
-    recognition.lang = "en-IN";
-
+    // --- State Management ---
+    const State = {
+      IDLE: 'idle',
+      THINKING: 'thinking',
+      LISTENING: 'listening',
+      RESPONDING: 'responding'
+    };
+    let currentState = State.IDLE;
     let sessionId = null;
 
-    micBtn.onclick = () => {
-      micBtn.classList.add("listening");
-      recognition.start();
-    };
+    // --- Selectors ---
+    const botContainer = document.getElementById('bot-container');
+    const statusText = document.getElementById('status-text');
+    const responseContainer = document.getElementById('response-container');
+    const textInput = document.getElementById('text-input');
+    const micBtn = document.getElementById('mic-btn');
+    const sendBtn = document.getElementById('send-btn');
+    const pupils = document.querySelectorAll('.pupil');
+    const lidsTop = document.querySelectorAll('.lid-top');
+    const lidsBottom = document.querySelectorAll('.lid-bottom');
 
-    newChatBtn.onclick = () => {
-      sessionId = null; // backend will create new session
-      userMsg.style.display = "none";
-      botMsg.innerHTML = "<strong>AgrowBot:</strong> New chat started. 🚜";
-      robot.classList.remove("thinking", "talking");
-    };
+    // --- Animations with GSAP ---
 
-    /* Speech result */
-    recognition.onresult = async (event) => {
-      const text = event.results[0][0].transcript;
-      micBtn.classList.remove("listening");
+    // 1. Blinking Logic
+    function blink() {
+      if (currentState === State.THINKING) return;
 
-      userMsg.style.display = "block";
-      userMsg.textContent = text;
+      const tl = gsap.timeline({ onComplete: () => setTimeout(blink, gsap.utils.random(2000, 5000)) });
+      tl.to(lidsTop, { top: '0%', duration: 0.1, ease: "power2.inOut" })
+        .to(lidsBottom, { bottom: '0%', duration: 0.1, ease: "power2.inOut" }, "<")
+        .to(lidsTop, { top: '-100%', duration: 0.12, ease: "power2.inOut" })
+        .to(lidsBottom, { bottom: '-100%', duration: 0.12, ease: "power2.inOut" }, "<");
+    }
+    blink();
 
-      botMsg.innerHTML = "<span class='thinking-text'>Thinking... 🌱</span>";
-      robot.classList.add("thinking");
+    // 2. Eye Movement (Follow Cursor)
+    window.addEventListener('mousemove', (e) => {
+      if (currentState !== State.IDLE && currentState !== State.LISTENING) return;
 
-      const apiUrl = window.location.origin.startsWith("http")
-        ? `${window.location.origin}/ask`
-        : "http://127.0.0.1:5000/ask";
+      const x = (e.clientX / window.innerWidth - 0.5) * 40;
+      const y = (e.clientY / window.innerHeight - 0.5) * 40;
+
+      gsap.to(pupils, {
+        x: x,
+        y: y,
+        duration: 0.4,
+        ease: "power2.out" /* Smoother follow */
+      });
+    });
+
+    // 3. Thinking Animation (REDUCED JITTER)
+    let thinkingTween;
+    function setThinking(isThinking) {
+      if (isThinking) {
+        currentState = State.THINKING;
+        statusText.innerText = "Thinking...";
+
+        // Reduced motion: Slower, smaller range
+        thinkingTween = gsap.to(pupils, {
+          x: "random(-5, 5)", // Much smaller range 
+          y: "random(-5, 5)",
+          duration: 0.8, // Slower duration
+          repeat: -1,
+          repeatRefresh: true,
+          ease: "sine.inOut"
+        });
+        // Slightly squint
+        gsap.to(lidsTop, { top: '-70%', duration: 0.3 });
+        gsap.to(lidsBottom, { bottom: '-90%', duration: 0.3 });
+      } else {
+        if (thinkingTween) thinkingTween.kill();
+        gsap.to(pupils, { x: 0, y: 0, duration: 0.5 });
+        gsap.to(lidsTop, { top: '-100%', duration: 0.3 });
+        gsap.to(lidsBottom, { bottom: '-100%', duration: 0.3 });
+      }
+    }
+
+    // 4. Reactions
+    function react(type) {
+      if (type === 'happy') {
+        gsap.to(pupils, { width: 120, height: 140, duration: 0.3, yoyo: true, repeat: 1 });
+        gsap.to(lidsBottom, { bottom: '-70%', duration: 0.2, yoyo: true, repeat: 1 });
+      }
+    }
+
+    // --- Core Logic & API ---
+
+    async function askAgriBot(question) {
+      if (!question.trim()) return;
+
+      setThinking(true);
+      responseContainer.style.display = "none";
+
+      const payload = {
+        question: question,
+        session_id: sessionId
+      };
 
       try {
-        const res = await fetch(apiUrl, {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            question: text,
-            session_id: sessionId
-          })
+        // Corrected API URL logic
+        const apiUrl = window.location.origin.startsWith("http")
+          ? `${window.location.origin}/ask`
+          : "https://xvs72r7z-5000.inc1.devtunnels.ms/ask";
+
+        const response = await fetch(apiUrl, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(payload)
         });
 
-        const data = await res.json();
+        const data = await response.json();
+        setThinking(false);
 
-        sessionId = data.session_id || sessionId;
-
-        robot.classList.remove("thinking");
-        robot.classList.add("talking");
-
-        if (data.error) {
-          botMsg.textContent = "⚠️ " + data.error;
-        } else {
-          botMsg.textContent = data.answer;
+        if (data.answer) {
+          sessionId = data.session_id || sessionId;
+          showResponse(data.answer);
+          react('happy');
           speak(data.answer);
+        } else {
+          showResponse("I encountered an error. Please try again.");
         }
-
-        setTimeout(() => robot.classList.remove("talking"), 3000);
-
       } catch (err) {
-        robot.classList.remove("thinking");
-        botMsg.textContent = "❌ Network error. Please try again.";
+        setThinking(false);
+        showResponse("Network error. Is the server running?");
       }
-    };
+    }
+
+    function showResponse(text) {
+      responseContainer.innerText = text;
+      responseContainer.style.display = "block";
+      // Scroll to top of new content
+      responseContainer.scrollTop = 0;
+
+      gsap.from(responseContainer, { y: 20, opacity: 0, duration: 0.5, ease: "back.out" });
+      currentState = State.RESPONDING;
+      statusText.innerText = "Responding";
+
+      // Keep "Responding" state active for longer so user can read without bot getting distracted
+      setTimeout(() => {
+        if (currentState === State.RESPONDING) {
+          currentState = State.IDLE;
+          statusText.innerText = "Idle";
+        }
+      }, 8000);
+    }
+
+    const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
+    if (SpeechRecognition) {
+      const recognition = new SpeechRecognition();
+      recognition.lang = "en-IN";
+
+      micBtn.onclick = () => {
+        if (currentState === State.LISTENING) {
+          recognition.stop();
+          return;
+        }
+        currentState = State.LISTENING;
+        statusText.innerText = "Listening...";
+        micBtn.classList.add('listening');
+        recognition.start();
+        // Eyes look up alertly
+        gsap.to(pupils, { y: -30, duration: 0.3, ease: "back.out" });
+      };
+
+      recognition.onresult = (event) => {
+        const text = event.results[0][0].transcript;
+        textInput.value = text;
+        askAgriBot(text);
+      };
+
+      recognition.onend = () => {
+        micBtn.classList.remove('listening');
+        if (currentState === State.LISTENING) {
+          currentState = State.IDLE;
+          statusText.innerText = "Idle";
+        }
+      };
+    }
 
     function speak(text) {
       const utter = new SpeechSynthesisUtterance(text);
       utter.lang = "en-IN";
-      speechSynthesis.speak(utter);
+      utter.onstart = () => {
+        // Subtle pupil pulse while speaking
+        gsap.to(pupils, { scale: 1.05, duration: 0.2, repeat: -1, yoyo: true });
+      };
+      utter.onend = () => {
+        gsap.to(pupils, { scale: 1, duration: 0.3 });
+      };
+      window.speechSynthesis.speak(utter);
     }
-  </script>
 
+    sendBtn.onclick = () => askAgriBot(textInput.value);
+    textInput.onkeypress = (e) => { if (e.key === 'Enter') askAgriBot(textInput.value); };
+
+    botContainer.ondblclick = () => {
+      sessionId = null;
+      showResponse("New conversation started.");
+      react('happy');
+    };
+
+  </script>
 </body>
 
 </html>

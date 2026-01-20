@@ -13,18 +13,13 @@ from sentence_transformers import SentenceTransformer
 # Suppress DeprecationWarnings
 warnings.filterwarnings("ignore", category=DeprecationWarning)
 
-# Load environment variables
 load_dotenv()
 
-# Initialize Flask app
 app = Flask(__name__)
-# Enable CORS for all origins
 CORS(app, resources={r"/*": {"origins": "*"}})
 
-# Initialize OpenAI client
 client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
 
-# Load RAG resources (FAISS index and chunks)
 print("Loading RAG resources...")
 try:
     index = faiss.read_index("agri.index")
@@ -33,11 +28,10 @@ try:
     print("RAG resources loaded successfully.")
 except Exception as e:
     print(f"Error loading RAG resources: {e}")
-    all_chunks = [] # Fallback
+    all_chunks = []
 
 embedder = SentenceTransformer("all-MiniLM-L6-v2")
 
-# Define Assistant Instructions
 INSTRUCTION = """You are a helpful agricultural assistant.
 
 Core rules:
@@ -86,10 +80,8 @@ def contextualize_question(question, session_id):
         return question
     
     try:
-        # Fetch concise history (last 3 messages)
         msgs = client.beta.threads.messages.list(thread_id=session_id, limit=3, order="desc")
         history_text = ""
-        # iterate in reverse to get chronological order from the fetched list
         for msg in reversed(list(msgs.data)):
             if msg.role == "user" or msg.role == "assistant":
                 content_text = ""
@@ -99,8 +91,7 @@ def contextualize_question(question, session_id):
                 # Avoid adding the bulky Context block to the history we send for rewriting
                 if "Context:" in content_text:
                      content_text = content_text.split("Context:")[0].strip()
-                     if "Question:" in content_text: # Handle the internal format
-                         # Extract just the question part if possible, or just skip huge prompt blocks
+                     if "Question:" in content_text:
                          try:
                              content_text = content_text.split("Question:")[1].strip()
                          except:
@@ -127,18 +118,13 @@ def contextualize_question(question, session_id):
         print(f"Error contextualizing: {e}")
         return question
 
-def retrieve_context(question, k=4):
+def retrieve_context(question, k=3):
     try:
         q_emb = embedder.encode([question])
         distances, ids = index.search(np.array(q_emb), k)
         
         chunks = []
         for i, dist in zip(ids[0], distances[0]):
-             # Context Strictness: 
-             # Only accept chunks within a reasonable distance window.
-             # L2 Distance in FAISS for normalized vectors: 0.0 (identical) to 2.0 (opposite).
-             # Threshold 1.2 is roughly cosine similarity 0.28 (very loose).
-             # Threshold 0.8 is roughly cosine similarity 0.68 (strict).
              if dist < 1.3: 
                 chunks.append(all_chunks[i])
         
