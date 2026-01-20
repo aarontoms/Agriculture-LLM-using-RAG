@@ -3,7 +3,11 @@ import faiss
 import numpy as np
 import os
 import time
+import warnings
 from flask import Flask, request, jsonify
+
+# Suppress DeprecationWarnings
+warnings.filterwarnings("ignore", category=DeprecationWarning)
 from flask_cors import CORS
 from dotenv import load_dotenv
 from openai import OpenAI
@@ -14,42 +18,48 @@ load_dotenv()
 
 # Initialize Flask app
 app = Flask(__name__)
+# Enable CORS for all origins
 CORS(app, resources={r"/*": {"origins": "*"}})
 
 # Initialize OpenAI client
 client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
 
-# Load FAISS index and chunks
+# Load RAG resources (FAISS index and chunks)
 print("Loading RAG resources...")
-index = faiss.read_index("agri.index")
-with open("chunks.pkl", "rb") as f:
-    all_chunks = pickle.load(f)
+try:
+    index = faiss.read_index("agri.index")
+    with open("chunks.pkl", "rb") as f:
+        all_chunks = pickle.load(f)
+    print("RAG resources loaded successfully.")
+except Exception as e:
+    print(f"Error loading RAG resources: {e}")
+    all_chunks = [] # Fallback
 
-# Initialize Embedder
 embedder = SentenceTransformer("all-MiniLM-L6-v2")
 
-# Assistant Instructions
-instruction = """You are a helpful assistant that answers questions primarily based on the provided context. Prefer Kerala-specific agricultural practices, pest control methods, crop varieties, and recommendations whenever they are available in the context. If Kerala-specific information is present, do not use general or global practices. If the user greets (e.g., hello, hi), respond with a short greeting and ask how you can help with agriculture or farming. Summarize in 2-3 short points only. Be concise. No intro or explanation needed and use phrases if needed. If the context does not contain sufficient specific information, respond with general agricultural guidance if the question is related to agriculture or farming. Assume the end user is a farmer and prioritize clear, practical, field-ready guidance over general or theoretical explanations. If the question is not related to agriculture or farming at all, respond with "I am sorry, I don't have the information to answer that question." Do not include asterisk marks or markdown formatting."""
+# Define Assistant Instructions
+INSTRUCTION = """You are a helpful assistant that answers questions primarily based on the provided context. Prefer Kerala-specific agricultural practices, pest control methods, crop varieties, and recommendations whenever they are available in the context. If Kerala-specific information is present, do not use general or global practices. If the user greets (e.g., hello, hi), respond with a short greeting and ask how you can help with agriculture or farming. Summarize in 2-3 short points only. Be concise. No intro or explanation needed and use phrases if needed. If the context does not contain sufficient specific information, respond with general agricultural guidance if the question is related to agriculture or farming. Assume the end user is a farmer and prioritize clear, practical, field-ready guidance over general or theoretical explanations. If the question is not related to agriculture or farming at all, respond with "I am sorry, I don't have the information to answer that question." Do not include asterisk marks or markdown formatting."""
 
-# Create or Retrieve Assistant
-# In a production environment, you would store this ID. For this setup, we verify if we can reuse one or create new.
-# To avoid creating a new assistant on every restart in development, you can hardcode the ID after first creation.
-# For now, we create a new one on startup to ensure instructions are up to date.
+# Create Assistant
+# Note: Ideally, you should reuse the assistant ID.
 assistant = client.beta.assistants.create(
     name="Agri Assistant",
-    instructions=instruction,
+    instructions=INSTRUCTION,
     model="gpt-4o",
 )
 print(f"Assistant created with ID: {assistant.id}")
 
-def retrieve(question, k=3):
-    q_emb = embedder.encode([question])
-    _, ids = index.search(np.array(q_emb), k)
-    return [all_chunks[i] for i in ids[0]]
+def retrieve_context(question, k=4):
+    try:
+        q_emb = embedder.encode([question])
+        _, ids = index.search(np.array(q_emb), k)
+        return "\n\n".join([all_chunks[i] for i in ids[0]])
+    except Exception as e:
+        print(f"Retrieval error: {e}")
+        return ""
 
-@app.route("/chat", methods=["POST"])
+@app.route("/ask", methods=["POST"])
 def chat():
-    print("Received request")
     data = request.json
     question = data.get("question")
     session_id = data.get("session_id")
@@ -57,86 +67,61 @@ def chat():
     if not question:
         return jsonify({"error": "Question is required"}), 400
 
-    # RAG Retrieval
-    context_chunks = retrieve(question, k=4)
-    context = "\n\n".join(context_chunks)
+    # Retrieve context and prepare message
+    context = retrieve_context(question)
+    user_content = f"Context:\n{context}\n\nQuestion:\n{question}"
 
-    # Prepare message with context
-    user_message_content = f"""Context:
-{context}
-
-Question:
-{question}
-"""
-
-    if not session_id:
-        # Create Thread AND Run in one go
-        try:
+    try:
+        run = None
+        if not session_id:
+            print("Starting new session...")
             run = client.beta.threads.create_and_run(
                 assistant_id=assistant.id,
-                thread={
-                    "messages": [
-                        {"role": "user", "content": user_message_content}
-                    ]
-                }
+                thread={"messages": [{"role": "user", "content": user_content}]}
             )
-            session_id = run.thread_id
-            print(f"Created new thread: {session_id}")
-        except Exception as e:
-            return jsonify({"error": str(e)}), 400
-    else:
-        # Add message to existing thread
-        try:
+            session_id = run.thread_id # Capture the new session ID
+        else:
+            print(f"Continuing session: {session_id}")
             client.beta.threads.messages.create(
                 thread_id=session_id,
                 role="user",
-                content=user_message_content
+                content=user_content
             )
-            
-            # Run Assistant
             run = client.beta.threads.runs.create(
                 thread_id=session_id,
                 assistant_id=assistant.id
             )
-        except Exception as e:
-            return jsonify({"error": str(e)}), 400
 
-    # Poll for completion
-    # A simple polling loop
-    while True:
-        run_status = client.beta.threads.runs.retrieve(
-            thread_id=session_id,
-            run_id=run.id
-        )
-        if run_status.status == 'completed':
-            break
-        elif run_status.status in ['failed', 'cancelled', 'expired']:
-            return jsonify({"error": f"Run failed with status: {run_status.status}"}), 500
-        time.sleep(1)
+        # Poll for completion
+        while True:
+            run_status = client.beta.threads.runs.retrieve(thread_id=session_id, run_id=run.id)
+            if run_status.status == 'completed':
+                break
+            if run_status.status in ['failed', 'cancelled', 'expired']:
+                return jsonify({"error": f"Run failed with status: {run_status.status}"}), 500
+            time.sleep(0.5)
 
-    # Retrieve Messages
-    messages = client.beta.threads.messages.list(
-        thread_id=session_id
-    )
-    
-    # Get the latest assistant response
-    # The default sort order is 'desc' (newest first).
-    answer = ""
-    for msg in messages.data:
-        if msg.role == "assistant":
-            for content_block in msg.content:
-                if content_block.type == "text":
-                    answer += content_block.text.value
-            break # Get only the latest message
-    
-    answer = answer.replace("*", "").strip()
-    
-    response_data = {
-        "answer": answer,
-        "session_id": session_id
-    }
+        # Get the latest answer
+        messages = client.beta.threads.messages.list(thread_id=session_id)
+        answer = ""
+        for msg in messages.data:
+            if msg.role == "assistant":
+                for content in msg.content:
+                    if content.type == "text":
+                        answer += content.text.value
+                break
+        
+        # Clean up response
+        answer = answer.replace("*", "").strip()
 
-    return jsonify(response_data)
+        return jsonify({
+            "answer": answer,
+            "session_id": session_id
+        })
+
+    except Exception as e:
+        print(f"Error processing request: {e}")
+        return jsonify({"error": str(e)}), 500
 
 if __name__ == "__main__":
     app.run(port=5000, debug=True)
