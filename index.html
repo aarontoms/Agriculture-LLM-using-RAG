@@ -30,7 +30,7 @@
 
     #active-question {
       position: absolute;
-      top: 10%;
+      top: 8%;
       left: 0;
       right: 0;
       margin: 0 auto;
@@ -256,6 +256,25 @@
 <body>
 
   <div id="active-question"></div>
+  <div id="status-indicator">Idle</div>
+
+  <style>
+    #status-indicator {
+      position: absolute;
+      top: 22%;
+      width: 100%;
+      text-align: center;
+      color: rgba(255, 255, 255, 0.4);
+      font-size: 0.9rem;
+      letter-spacing: 2px;
+      text-transform: uppercase;
+      font-weight: 600;
+      opacity: 0;
+      transition: opacity 0.5s ease;
+      z-index: 0;
+      pointer-events: none;
+    }
+  </style>
 
   <div id="bot-container">
     <div class="eyes-wrapper">
@@ -354,6 +373,12 @@
     const eyes = document.querySelectorAll('.eye');
     const voiceSelect = document.getElementById('voice-select');
     const previewBtn = document.getElementById('preview-btn');
+    const statusIndicator = document.getElementById('status-indicator');
+
+    function updateStatus(text, show = true) {
+      statusIndicator.innerText = text;
+      statusIndicator.style.opacity = show ? 0.6 : 0;
+    }
 
     // --- Animations ---
 
@@ -365,6 +390,7 @@
 
     function wakeUp() {
       currentState = State.IDLE;
+      updateStatus("Idle");
       gsap.to(lidsTop, { top: '-100%', duration: 0.5 });
       gsap.to(lidsBottom, { bottom: '-100%', duration: 0.5 });
       gsap.to(eyes, { height: 140, borderRadius: "50%", duration: 0.5 }); // Restore shape
@@ -373,6 +399,7 @@
     function goToSleep() {
       if (currentState !== State.IDLE) return;
       currentState = State.SLEEPING;
+      updateStatus("Zzz...", true);
       gsap.to(lidsTop, { top: '0%', duration: 0.8, ease: "power2.inOut" });
       gsap.to(lidsBottom, { bottom: '0%', duration: 0.8, ease: "power2.inOut" });
     }
@@ -399,6 +426,7 @@
     function setThinking(isThinking) {
       if (isThinking) {
         currentState = State.THINKING;
+        updateStatus("Thinking...");
         // Look up and to the right/left (pondering)
         gsap.to(pupils, { x: 30, y: -40, duration: 1, ease: "power2.out" });
         // Slow scan
@@ -411,6 +439,7 @@
         gsap.to(lidsTop, { top: '-100%', duration: 0.5 });
         gsap.to(lidsBottom, { bottom: '-100%', duration: 0.5 });
         gsap.to(pupils, { x: 0, y: 0, duration: 0.5 });
+        updateStatus("Idle");
       }
     }
 
@@ -418,6 +447,7 @@
     function setSpeaking(isSpeaking) {
       if (isSpeaking) {
         currentState = State.SPEAKING;
+        updateStatus("Speaking...");
         speakPulseTween = gsap.to(pupils, { scale: 1.15, duration: 0.2, repeat: -1, yoyo: true });
         // Happy eyes (Crescent)
         gsap.to(eyes, { borderRadius: "20px 20px 100px 100px", height: 100, duration: 0.3 });
@@ -429,6 +459,7 @@
         gsap.to(eyes, { borderRadius: "50%", height: 140, duration: 0.3 }); // Back to oval
         gsap.to(lidsBottom, { bottom: '-100%', duration: 0.3 });
         resetIdleTimer();
+        updateStatus("Idle");
       }
     }
 
@@ -507,45 +538,55 @@
     };
 
 
+
+
     // --- Inputs ---
-    document.getElementById('send-btn').onclick = () => ask(textInput.value);
-    // New Chat Handler
-    document.getElementById('new-chat-btn').onclick = () => {
-      audioPlayer.pause(); // Stop talking
-      setSpeaking(false);
-      sessionId = null;
-      document.getElementById('response-container').style.display = "none";
-      activeQuestion.innerText = "New Chat Started";
-      gsap.to(activeQuestion, { opacity: 1, y: 0, duration: 0.5 });
-      setTimeout(() => gsap.to(activeQuestion, { opacity: 0, y: -20, duration: 0.5 }), 2000);
+    document.addEventListener("DOMContentLoaded", () => {
+      document.getElementById('send-btn').onclick = () => ask(textInput.value);
 
-      // Happy reaction
-      setSpeaking(true);
-      setTimeout(() => setSpeaking(false), 1000);
-    };
-    textInput.onkeypress = (e) => { if (e.key === 'Enter') ask(textInput.value); };
-
-    // --- Mic ---
-    const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
-    if (SpeechRecognition) {
-      const rec = new SpeechRecognition();
-
-      rec.lang = "en-IN";
-      rec.onresult = (e) => ask(e.results[0][0].transcript);
-      rec.onstart = () => { micBtn.classList.add('listening'); resetIdleTimer(); };
-      rec.onend = () => micBtn.classList.remove('listening');
-
-      micBtn.onclick = () => {
-        // If currently speaking, stop immediately
-        if (window.speechSynthesis.speaking) {
-          window.speechSynthesis.cancel();
-          setSpeaking(false);
-        }
-        rec.start();
+      document.getElementById('new-chat-btn').onclick = () => {
+        audioPlayer.pause();
+        setSpeaking(false);
+        sessionId = null;
+        document.getElementById('response-container').style.display = "none";
+        activeQuestion.innerText = "New Chat Started";
+        gsap.to(activeQuestion, { opacity: 1, y: 0, duration: 0.5 });
+        setTimeout(() => gsap.to(activeQuestion, { opacity: 0, y: -20, duration: 0.5 }), 2000);
+        setSpeaking(true);
+        setTimeout(() => setSpeaking(false), 1000);
       };
-    }
 
-    resetIdleTimer(); // Start timer
+      textInput.onkeypress = (e) => { if (e.key === 'Enter') ask(textInput.value); };
+
+      const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
+      if (SpeechRecognition) {
+        const rec = new SpeechRecognition();
+        rec.lang = "en-IN";
+        rec.onresult = (e) => ask(e.results[0][0].transcript);
+        rec.onstart = () => {
+          micBtn.classList.add('listening');
+          resetIdleTimer();
+          updateStatus("Listening...");
+        };
+        rec.onend = () => micBtn.classList.remove('listening');
+
+        micBtn.onclick = () => {
+          if (!audioPlayer.paused) {
+            audioPlayer.pause();
+            setSpeaking(false);
+          }
+          rec.start();
+        };
+      } else {
+        micBtn.style.display = 'none';
+      }
+
+      resetIdleTimer();
+      updateStatus("Idle");
+    });
+
+    resetIdleTimer();
+    updateStatus("Idle");
   </script>
 </body>
 
