@@ -563,58 +563,73 @@
       if (SpeechRecognition && navigator.mediaDevices) {
         const rec = new SpeechRecognition();
         rec.lang = "en-IN";
-        let mediaRecorder;
-        let audioChunks = [];
-        let transcript = "";
+
+        let audioContext, processor, input, leftChannel = [], transcript = "";
+
+        function encodeWAV(samples) {
+          let buffer = new ArrayBuffer(44 + samples.length * 2);
+          let view = new DataView(buffer);
+          const writeString = (off, s) => { for (let i = 0; i < s.length; i++) view.setUint8(off + i, s.charCodeAt(i)); };
+          writeString(0, 'RIFF');
+          view.setUint32(4, 32 + samples.length * 2, true);
+          writeString(8, 'WAVE');
+          writeString(12, 'fmt ');
+          view.setUint32(16, 16, true);
+          view.setUint16(20, 1, true);
+          view.setUint16(22, 1, true);
+          view.setUint32(24, 16000, true);
+          view.setUint32(28, 16000 * 2, true);
+          view.setUint16(32, 2, true);
+          view.setUint16(34, 16, true);
+          writeString(36, 'data');
+          view.setUint32(40, samples.length * 2, true);
+          let offset = 44;
+          for (let i = 0; i < samples.length; i++, offset += 2) {
+            let s = Math.max(-1, Math.min(1, samples[i]));
+            view.setInt16(offset, s < 0 ? s * 0x8000 : s * 0x7FFF, true);
+          }
+          return new Blob([view], { type: 'audio/wav' });
+        }
 
         rec.onstart = () => {
           micBtn.classList.add('listening');
-          resetIdleTimer();
           updateStatus("Listening...");
-
+          leftChannel = [];
           navigator.mediaDevices.getUserMedia({ audio: true }).then(stream => {
-            const mimeType = MediaRecorder.isTypeSupported('audio/webm') ? 'audio/webm' : 'audio/mp4';
-            mediaRecorder = new MediaRecorder(stream, { mimeType: mimeType });
-            audioChunks = [];
+            audioContext = new (window.AudioContext || window.webkitAudioContext)({ sampleRate: 16000 });
+            input = audioContext.createMediaStreamSource(stream);
+            processor = audioContext.createScriptProcessor(4096, 1, 1);
+            processor.onaudioprocess = (e) => { leftChannel.push(new Float32Array(e.inputBuffer.getChannelData(0))); };
+            input.connect(processor);
+            processor.connect(audioContext.destination);
 
-            mediaRecorder.ondataavailable = e => {
-              if (e.data.size > 0) audioChunks.push(e.data);
-            };
+            rec.onend = () => {
+              micBtn.classList.remove('listening');
+              updateStatus("Processing...");
+              processor.disconnect(); input.disconnect();
+              stream.getTracks().forEach(t => t.stop());
+              audioContext.close();
 
-            mediaRecorder.onstop = () => {
-              const audioBlob = new Blob(audioChunks, { type: mimeType });
+              let flattened = new Float32Array(leftChannel.reduce((acc, c) => acc + c.length, 0));
+              let offset = 0;
+              for (let channel of leftChannel) { flattened.set(channel, offset); offset += channel.length; }
+
+              const audioBlob = encodeWAV(flattened);
               const reader = new FileReader();
               reader.readAsDataURL(audioBlob);
               reader.onloadend = () => {
                 const base64data = reader.result.split(',')[1];
                 if (transcript) ask(transcript, base64data);
               };
-              stream.getTracks().forEach(track => track.stop());
             };
-            mediaRecorder.start();
-          }).catch(e => {
-            console.error("Mic Access Error:", e);
-            updateStatus("Mic Error");
-          });
+          }).catch(e => { console.error("Mic Error:", e); updateStatus("Mic Error"); });
         };
 
         rec.onresult = (e) => { transcript = e.results[0][0].transcript; };
-
-        rec.onend = () => {
-          micBtn.classList.remove('listening');
-          if (mediaRecorder && mediaRecorder.state === 'recording') {
-            mediaRecorder.stop();
-          } else if (transcript && !mediaRecorder) {
-            // Fallback if recorder failed to start
-            ask(transcript);
-          }
-        };
+        rec.onerror = () => { micBtn.classList.remove('listening'); updateStatus("Mic Error"); };
 
         micBtn.onclick = () => {
-          if (!audioPlayer.paused) {
-            audioPlayer.pause();
-            setSpeaking(false);
-          }
+          if (!audioPlayer.paused) { audioPlayer.pause(); setSpeaking(false); }
           transcript = "";
           rec.start();
         };
@@ -625,9 +640,6 @@
       resetIdleTimer();
       updateStatus("Idle");
     });
-
-    resetIdleTimer();
-    updateStatus("Idle");
   </script>
 </body>
 

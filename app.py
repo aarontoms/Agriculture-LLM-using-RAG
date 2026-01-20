@@ -1,11 +1,9 @@
-import os
-import warnings
-import logging
+import os, warnings, logging
 
-# Suppress all terminal bloat (Call this as early as possible)
-os.environ['TF_CPP_MIN_LOG_LEVEL'] = '3'  # Hide TensorFlow warnings/logs
-warnings.filterwarnings("ignore")         # Hide all warnings
-logging.getLogger('werkzeug').setLevel(logging.ERROR) # Quiet Flask
+# 1. Suppress all terminal bloat
+os.environ['TF_CPP_MIN_LOG_LEVEL'] = '3'
+warnings.filterwarnings("ignore")
+logging.getLogger('werkzeug').setLevel(logging.ERROR)
 
 import pickle
 import faiss
@@ -17,6 +15,7 @@ from dotenv import load_dotenv
 from openai import OpenAI
 from sentence_transformers import SentenceTransformer
 import torchaudio
+import torch
 from speechbrain.inference import SpeakerRecognition
 import tempfile
 import shutil
@@ -40,7 +39,7 @@ except Exception as e:
     print(f"Error loading Speaker Model: {e}")
     verification_model = None
 
-# Store speaker embeddings: { session_id: embedding_tensor }
+# Store speaker raw waveforms: { session_id: waveform_tensor }
 session_speakers = {}
 
 def process_verification(session_id, audio_b64):
@@ -48,38 +47,65 @@ def process_verification(session_id, audio_b64):
     Returns:
         is_same_user (bool): True if match or uncertain, False if definitely new user
         new_session_id (str|None): If mismatch, session_id is None (reset).
+        current_wave (tensor|None): The processed waveform.
+        duration (float): Duration of audio.
     """
     if not verification_model or not audio_b64:
-        return True, session_id # Skip if no model/audio
+        return True, session_id, None, 0
 
     try:
-        # 1. Save Base64 to Temp File (WebM preferred from browser)
+        # 1. Save Base64 to Temp WAV in current directory to avoid path issues
         audio_bytes = base64.b64decode(audio_b64)
-        with tempfile.NamedTemporaryFile(suffix=".webm", delete=False) as temp_audio:
+        with tempfile.NamedTemporaryFile(suffix=".wav", delete=False, dir=".") as temp_audio:
             temp_audio.write(audio_bytes)
             temp_audio_path = temp_audio.name
         
-        # 2. Check Duration
-        # Torchaudio should handle webm if ffmpeg is available on system.
-        # If not, we might need 'librosa' or explicit ffmpeg conversion.
+        # 2. Check Duration & Load
         signal, fs = torchaudio.load(temp_audio_path)
-        duration = signal.shape[1] / fs
         
-        print(f"Audio Duration: {duration:.2f}s")
+        # Force Mono
+        if signal.shape[0] > 1:
+            signal = torch.mean(signal, dim=0, keepdim=True)
+            
+        # Ensure 16kHz
+        if fs != 16000:
+            signal = torchaudio.transforms.Resample(orig_freq=fs, new_freq=16000)(signal)
+            fs = 16000
 
-        # 3. Extract Embedding
-        emb = verification_model.encode_batch(signal)
+        # --- WINDOWS DEEP CLEAN ---
+        # Convert to numpy and back to a fresh tensor to strip weird strides/metadata
+        sig_np = signal.detach().cpu().numpy()
+        signal = torch.from_numpy(sig_np).to(torch.float32)
         
-        # 4. Verification Logic
+        # Enforce strict [1, Time] shape as required by SpeakerRecognition
+        # signal is likely [1, T] after mono conversion, but we ensure it here.
+        if signal.ndim == 2:
+            pass  # already correct [1, T] or [C, T] where C=1
+        elif signal.ndim == 1:
+            signal = signal.unsqueeze(0)
+        else:
+            raise ValueError(f"Invalid signal shape: {signal.shape}")
+
+        duration = signal.shape[1] / fs
+        if duration < 0.5:
+             print(f"Audio too short ({duration:.2f}s), skipping verification.")
+             return True, session_id, None, duration
+
+        print(f"Audio Duration: {duration:.2f}s | Shape: {list(signal.shape)}")
+
+        # 3. Verification Logic
         is_same = True
+        verification_model.eval()
         
         if session_id in session_speakers:
-            # We have a reference. Compare.
-            ref_emb = session_speakers[session_id]
-            score, prediction = verification_model.verify_batch(ref_emb, emb)
-            print(f"Verification Score: {score[0]}, Prediction: {prediction[0]}")
+            # We have a reference waveform. Compare using raw waveforms.
+            ref_wave = session_speakers[session_id]
+            with torch.no_grad():
+                # Correct way for SpeakerRecognition: pass waveforms, let it handle encoding
+                score, prediction = verification_model.verify_batch(ref_wave, signal)
             
-            # Use threshold (SpeechBrain default is usually tuned, but let's trust prediction)
+            print(f"Verification Score: {score[0].item():.4f}, Prediction: {prediction[0].item()}")
+            
             if not prediction[0]:
                 print(f"User Mismatch detected! Resetting session.")
                 is_same = False
@@ -87,12 +113,8 @@ def process_verification(session_id, audio_b64):
             else:
                 print("User verified.")
         
-        # 5. Update Reference (Locking Rule)
-        if session_id and session_id not in session_speakers and duration > 1.0:
-            session_speakers[session_id] = emb
-            print(f"Reference embedding stored for session: {session_id}")
-        
-        return is_same, session_id, emb, duration
+        # Note: We return the waveform itself to be stored if it's a new session
+        return is_same, session_id, signal, duration
 
     except Exception as e:
         print(f"Verification Check Error: {e}")
@@ -142,7 +164,6 @@ Greeting:
 - If greeted, respond happily and ask how you can help with farming today!
 """
 
-# ... (Previous assistant creation code remains similar, updated instructions used) ...
 assistant = client.beta.assistants.create(
     name="AgrowBot",
     instructions=INSTRUCTION,
@@ -160,7 +181,6 @@ def generate_audio(text, voice="alloy"):
             voice=voice,
             input=text
         )
-        # Convert binary audio to base64 for easy transport in JSON
         audio_b64 = base64.b64encode(response.content).decode("utf-8")
         return audio_b64
     except Exception as e:
@@ -168,9 +188,6 @@ def generate_audio(text, voice="alloy"):
         return None
 
 def contextualize_question(question, session_id):
-    """
-    If a session exists, use history to rewrite the question for better retrieval.
-    """
     if not session_id:
         return question
     
@@ -183,7 +200,7 @@ def contextualize_question(question, session_id):
                 for part in msg.content:
                     if part.type == "text":
                         content_text += part.text.value
-                # Avoid adding the bulky Context block to the history we send for rewriting
+                
                 if "Context:" in content_text:
                      content_text = content_text.split("Context:")[0].strip()
                      if "Question:" in content_text:
@@ -197,11 +214,10 @@ def contextualize_question(question, session_id):
         if not history_text:
             return question
 
-        # Ask LLM to rewrite
         response = client.chat.completions.create(
             model="gpt-3.5-turbo",
             messages=[
-                {"role": "system", "content": "Rewrite the last user question to be a standalone search query based on the chat history. Retain specific entities like crop names (e.g., 'mushrooms', 'tomatoes') from previous turns if the new question refers to them implicitly (e.g., 'what about light?'). Return only the rewritten question."},
+                {"role": "system", "content": "Rewrite the last user question to be a standalone search query based on the chat history. Return only the rewritten question."},
                 {"role": "user", "content": f"History:\n{history_text}\n\nLast Question: {question}"}
             ],
             temperature=0.3
@@ -213,17 +229,14 @@ def contextualize_question(question, session_id):
         print(f"Error contextualizing: {e}")
         return question
 
-
 def retrieve_context(question, k=3):
     try:
         q_emb = embedder.encode([question])
         distances, ids = index.search(np.array(q_emb), k)
-        
         chunks = []
         for i, dist in zip(ids[0], distances[0]):
              if dist < 1.3: 
                 chunks.append(all_chunks[i])
-        
         return "\n\n".join(chunks)
     except Exception as e:
         print(f"Retrieval error: {e}")
@@ -234,24 +247,20 @@ def chat():
     data = request.json
     question = data.get("question")
     session_id = data.get("session_id")
-    audio_b64 = data.get("audio") # Input audio for verification
-    # Default to 'alloy' if not provided
+    audio_b64 = data.get("audio") 
     voice = data.get("voice", "alloy")
 
     if not question:
         return jsonify({"error": "Question is required"}), 400
 
-    # Speaker Verification
-    current_emb = None
+    current_wave = None
     current_duration = 0
     
     if audio_b64:
-        # Check against existing session
-        is_same, ver_session_id, current_emb, current_duration = process_verification(session_id, audio_b64)
+        is_same, ver_session_id, current_wave, current_duration = process_verification(session_id, audio_b64)
         if not is_same:
             print("Resetting session due to speaker mismatch.")
-            session_id = None # Force new session
-        # If is_same is True, session_id remains.
+            session_id = None 
 
     search_query = contextualize_question(question, session_id)
     context = retrieve_context(search_query)
@@ -268,19 +277,18 @@ def chat():
             session_id = run.thread_id
             
             # Store New Reference if duration is sufficient (> 1.5s)
-            if current_emb is not None and current_duration > 1.5:
-                 print(f"Locking new speaker reference for session {session_id}")
-                 session_speakers[session_id] = current_emb
-            elif current_emb is not None:
-                 print(f"Audio too short ({current_duration:.2f}s) to lock reference. Waiting for longer utterance.")
+            if current_wave is not None and current_duration > 1.5:
+                 print(f"Locking new speaker reference for session {session_id}\n")
+                 session_speakers[session_id] = current_wave
+            elif current_wave is not None:
+                 print(f"Audio too short ({current_duration:.2f}s) to lock reference.")
         else:
-            # Existing session
             print(f"Continuing session: {session_id}")
             
-            # If we don't have a reference yet (because previous were too short), try to set it now
-            if session_id not in session_speakers and current_emb is not None and current_duration > 1.5:
+            # Late-locking if needed
+            if session_id not in session_speakers and current_wave is not None and current_duration > 1.5:
                 print(f"Late-locking speaker reference for session {session_id}")
-                session_speakers[session_id] = current_emb
+                session_speakers[session_id] = current_wave
                 
             client.beta.threads.messages.create(
                 thread_id=session_id,
@@ -310,14 +318,12 @@ def chat():
                 break
         
         answer = answer.replace("*", "").strip()
-
-        # Generate Audio
-        audio_b64 = generate_audio(answer, voice=voice)
+        audio_b64_response = generate_audio(answer, voice=voice)
 
         return jsonify({
             "answer": answer,
             "session_id": session_id,
-            "audio": audio_b64
+            "audio": audio_b64_response
         })
 
     except Exception as e:
