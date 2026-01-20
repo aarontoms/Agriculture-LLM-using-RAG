@@ -473,7 +473,7 @@
       audioPlayer.play().catch(e => console.log("Playback error:", e));
     }
 
-    async function ask(query) {
+    async function ask(query, audioB64 = null) {
       if (!query.trim()) return;
       audioPlayer.pause(); // Stop talking if the user types/sends
       setSpeaking(false);
@@ -487,14 +487,15 @@
       document.getElementById('response-container').style.display = "none";
 
       try {
-        const api = window.location.origin.startsWith("http") ? "/ask" : "https://xvs72r7z-5000.inc1.devtunnels.ms/ask";
+        const api = window.location.origin.startsWith("http") ? "/ask" : "http://127.0.0.1:5000/ask";
         const res = await fetch(api, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
             question: query,
             session_id: sessionId,
-            voice: voiceSelect.value
+            voice: voiceSelect.value,
+            audio: audioB64
           })
         });
         const data = await res.json();
@@ -559,22 +560,62 @@
       textInput.onkeypress = (e) => { if (e.key === 'Enter') ask(textInput.value); };
 
       const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
-      if (SpeechRecognition) {
+      if (SpeechRecognition && navigator.mediaDevices) {
         const rec = new SpeechRecognition();
         rec.lang = "en-IN";
-        rec.onresult = (e) => ask(e.results[0][0].transcript);
+        let mediaRecorder;
+        let audioChunks = [];
+        let transcript = "";
+
         rec.onstart = () => {
           micBtn.classList.add('listening');
           resetIdleTimer();
           updateStatus("Listening...");
+
+          navigator.mediaDevices.getUserMedia({ audio: true }).then(stream => {
+            const mimeType = MediaRecorder.isTypeSupported('audio/webm') ? 'audio/webm' : 'audio/mp4';
+            mediaRecorder = new MediaRecorder(stream, { mimeType: mimeType });
+            audioChunks = [];
+
+            mediaRecorder.ondataavailable = e => {
+              if (e.data.size > 0) audioChunks.push(e.data);
+            };
+
+            mediaRecorder.onstop = () => {
+              const audioBlob = new Blob(audioChunks, { type: mimeType });
+              const reader = new FileReader();
+              reader.readAsDataURL(audioBlob);
+              reader.onloadend = () => {
+                const base64data = reader.result.split(',')[1];
+                if (transcript) ask(transcript, base64data);
+              };
+              stream.getTracks().forEach(track => track.stop());
+            };
+            mediaRecorder.start();
+          }).catch(e => {
+            console.error("Mic Access Error:", e);
+            updateStatus("Mic Error");
+          });
         };
-        rec.onend = () => micBtn.classList.remove('listening');
+
+        rec.onresult = (e) => { transcript = e.results[0][0].transcript; };
+
+        rec.onend = () => {
+          micBtn.classList.remove('listening');
+          if (mediaRecorder && mediaRecorder.state === 'recording') {
+            mediaRecorder.stop();
+          } else if (transcript && !mediaRecorder) {
+            // Fallback if recorder failed to start
+            ask(transcript);
+          }
+        };
 
         micBtn.onclick = () => {
           if (!audioPlayer.paused) {
             audioPlayer.pause();
             setSpeaking(false);
           }
+          transcript = "";
           rec.start();
         };
       } else {
