@@ -1,0 +1,10 @@
+flask
+flask-cors
+python-dotenv
+openai
+sentence-transformers
+faiss-cpu
+numpy
+torchaudio
+speechbrain
+soundfile
