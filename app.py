@@ -14,7 +14,7 @@ load_dotenv()
 
 # Initialize Flask app
 app = Flask(__name__)
-CORS(app)
+CORS(app, resources={r"/*": {"origins": "*"}})
 
 # Initialize OpenAI client
 client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
@@ -57,16 +57,6 @@ def chat():
     if not question:
         return jsonify({"error": "Question is required"}), 400
 
-    # Manage Thread (Session)
-    if not session_id:
-        thread = client.beta.threads.create()
-        session_id = thread.id
-        print(f"Created new thread: {session_id}")
-    else:
-        # We assume the thread exists if ID is provided.
-        # In production, wrap in try-except to handle invalid thread IDs.
-        pass
-
     # RAG Retrieval
     context_chunks = retrieve(question, k=4)
     context = "\n\n".join(context_chunks)
@@ -79,21 +69,37 @@ Question:
 {question}
 """
 
-    # Add message to thread
-    try:
-        client.beta.threads.messages.create(
-            thread_id=session_id,
-            role="user",
-            content=user_message_content
-        )
-    except Exception as e:
-        return jsonify({"error": str(e)}), 400
-
-    # Run Assistant
-    run = client.beta.threads.runs.create(
-        thread_id=session_id,
-        assistant_id=assistant.id
-    )
+    if not session_id:
+        # Create Thread AND Run in one go
+        try:
+            run = client.beta.threads.create_and_run(
+                assistant_id=assistant.id,
+                thread={
+                    "messages": [
+                        {"role": "user", "content": user_message_content}
+                    ]
+                }
+            )
+            session_id = run.thread_id
+            print(f"Created new thread: {session_id}")
+        except Exception as e:
+            return jsonify({"error": str(e)}), 400
+    else:
+        # Add message to existing thread
+        try:
+            client.beta.threads.messages.create(
+                thread_id=session_id,
+                role="user",
+                content=user_message_content
+            )
+            
+            # Run Assistant
+            run = client.beta.threads.runs.create(
+                thread_id=session_id,
+                assistant_id=assistant.id
+            )
+        except Exception as e:
+            return jsonify({"error": str(e)}), 400
 
     # Poll for completion
     # A simple polling loop
@@ -123,9 +129,7 @@ Question:
                     answer += content_block.text.value
             break # Get only the latest message
     
-    # Format Answer (remove markdown if requested by instruction, but model should handle it)
-    # The user instruction says "Do not include asterisk marks or markdown formatting."
-    # The model should follow this, but we can clean up if needed.
+    answer = answer.replace("*", "").strip()
     
     response_data = {
         "answer": answer,
