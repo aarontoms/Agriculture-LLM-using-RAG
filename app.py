@@ -20,6 +20,7 @@ from speechbrain.inference import SpeakerRecognition
 import tempfile
 import shutil
 import base64
+import threading
 
 load_dotenv()
 
@@ -41,6 +42,11 @@ except Exception as e:
 
 # Store speaker raw waveforms: { session_id: waveform_tensor }
 session_speakers = {}
+
+# Store conversation history locally: { session_id: [ {"role": "user", "content": "..."}, ... ] }
+conversation_history = {}
+
+MODEL_NAME = "gpt-4o-mini"
 
 def process_verification(session_id, audio_b64):
     """
@@ -140,12 +146,34 @@ except Exception as e:
 
 embedder = SentenceTransformer("all-MiniLM-L6-v2")
 
+# Ensure static/audio exists for Async TTS
+AUDIO_DIR = os.path.join("static", "audio")
+os.makedirs(AUDIO_DIR, exist_ok=True)
+
+def generate_audio_file(text, filename, voice="alloy"):
+    """
+    Generates audio in background and saves to static/audio/filename.
+    """
+    try:
+        start = time.time()
+        response = client.audio.speech.create(
+            model="tts-1",
+            voice=voice,
+            input=text
+        )
+        filepath = os.path.join(AUDIO_DIR, filename)
+        response.stream_to_file(filepath)
+        print(f"TTS Generated: {filename} in {time.time() - start:.2f}s")
+    except Exception as e:
+        print(f"TTS Error: {e}")
+
 INSTRUCTION = """You are a helpful and jolly agricultural assistant named AgrowBot.
 
 Core rules:
 - Answer the question using the provided context whenever possible.
 - Prefer Kerala-specific agricultural practices, crop varieties, pest control methods, climate, soil, and farming recommendations when they appear in the context.
 - If Kerala-specific information is present, do not replace it with general or global practices.
+- If context is not present, answer it normally but do not acknowledge the lack of context.
 
 Relevance handling:
 - Treat any question that can reasonably relate to agriculture, farming, crops, soil, climate, irrigation, pests, fertilizers, livestock, tools, weather, or rural livelihood as agricultural.
@@ -157,6 +185,7 @@ Refusal rule (strict and last-resort):
 Tone and Style:
 - Be cheerful, happy, and encouraging!
 - Answer in very few direct words (max 2-3 short sentences).
+- Respond using direct, meaningful phrases and move straight to the answer with no introductions or filler.
 - No standard intros/outros.
 - Do not use markdown, bullets, numbering, or asterisks.
 
@@ -171,64 +200,6 @@ assistant = client.beta.assistants.create(
 )
 print(f"Assistant created with ID: {assistant.id}")
 
-def generate_audio(text, voice="alloy"):
-    """
-    Generates audio using OpenAI TTS-1 (Standard) and returns base64 string.
-    """
-    try:
-        response = client.audio.speech.create(
-            model="tts-1",
-            voice=voice,
-            input=text
-        )
-        audio_b64 = base64.b64encode(response.content).decode("utf-8")
-        return audio_b64
-    except Exception as e:
-        print(f"TTS Error: {e}")
-        return None
-
-def contextualize_question(question, session_id):
-    if not session_id:
-        return question
-    
-    try:
-        msgs = client.beta.threads.messages.list(thread_id=session_id, limit=3, order="desc")
-        history_text = ""
-        for msg in reversed(list(msgs.data)):
-            if msg.role == "user" or msg.role == "assistant":
-                content_text = ""
-                for part in msg.content:
-                    if part.type == "text":
-                        content_text += part.text.value
-                
-                if "Context:" in content_text:
-                     content_text = content_text.split("Context:")[0].strip()
-                     if "Question:" in content_text:
-                         try:
-                             content_text = content_text.split("Question:")[1].strip()
-                         except:
-                             pass
-                
-                history_text += f"{msg.role}: {content_text}\n"
-
-        if not history_text:
-            return question
-
-        response = client.chat.completions.create(
-            model="gpt-3.5-turbo",
-            messages=[
-                {"role": "system", "content": "Rewrite the last user question to be a standalone search query based on the chat history. Return only the rewritten question."},
-                {"role": "user", "content": f"History:\n{history_text}\n\nLast Question: {question}"}
-            ],
-            temperature=0.3
-        )
-        rewritten = response.choices[0].message.content.strip()
-        print(f"Rewrote query: '{question}' -> '{rewritten}'")
-        return rewritten
-    except Exception as e:
-        print(f"Error contextualizing: {e}")
-        return question
-
 def retrieve_context(question, k=3):
     try:
         q_emb = embedder.encode([question])
@@ -242,8 +213,33 @@ def retrieve_context(question, k=3):
         print(f"Retrieval error: {e}")
         return ""
 
+# Store last mentioned entity for each session to improve RAG: { session_id: "mushroom" }
+last_active_entities = {}
+
+def extract_and_track_entity(text, session_id):
+    """
+    Simple keyword extraction to track the current subject (e.g., 'mushroom', 'tomato').
+    This avoids using an LLM to rewrite queries.
+    """
+    # Common agricultural entities in Kerala/General context
+    keywords = [
+        "mushroom", "paddy", "rice", "banana", "coconut", "arecanut", 
+        "pepper", "cardamom", "ginger", "turmeric", "rubber", "tea", "coffee",
+        "vegetable", "tomato", "chilli", "brinjal", "cow", "goat", "chicken",
+        "fertilizer", "manure", "soil", "irrigation", "corn", "maize", "wheat",
+        "sugarcane", "cassava", "yam", "pulses", "pest", "disease",
+    ]
+    
+    text_lower = text.lower()
+    for word in keywords:
+        if word in text_lower:
+            last_active_entities[session_id] = word
+            return
+    # If no new entity found, we keep the previous one in the global dict
+
 @app.route("/ask", methods=["POST"])
 def chat():
+    request_start = time.time()
     data = request.json
     question = data.get("question")
     session_id = data.get("session_id")
@@ -253,53 +249,68 @@ def chat():
     if not question:
         return jsonify({"error": "Question is required"}), 400
 
-    current_wave = None
-    current_duration = 0
-    
+    # 1. Initialize Thread (Assistants API History)
+    if not session_id:
+        print("Starting new session (Thread)...")
+        # Create a new Thread with the initial system message logic handled by Assistant Instructions
+        thread = client.beta.threads.create()
+        session_id = thread.id
+    else:
+        print(f"Continuing session: {session_id}")
+
+    # 2. Speaker Verification (Enabled)
+    session_reset = False
     if audio_b64:
-        is_same, ver_session_id, current_wave, current_duration = process_verification(session_id, audio_b64)
-        if not is_same:
-            print("Resetting session due to speaker mismatch.")
-            session_id = None 
-
-    search_query = contextualize_question(question, session_id)
-    context = retrieve_context(search_query)
-    user_content = f"Context:\n{context}\n\nQuestion:\n{question}"
-
-    try:
-        run = None
-        if not session_id:
-            print("Starting new session...")
-            run = client.beta.threads.create_and_run(
-                assistant_id=assistant.id,
-                thread={"messages": [{"role": "user", "content": user_content}]}
-            )
-            session_id = run.thread_id
-            
-            # Store New Reference if duration is sufficient (> 1.5s)
-            if current_wave is not None and current_duration > 1.5:
-                 print(f"Locking new speaker reference for session {session_id}\n")
+        is_same_user, ver_session_id, current_wave, current_duration = process_verification(session_id, audio_b64)
+        if not is_same_user:
+            print("User mismatch! Resetting history (New Thread).")
+            # Create a brand new thread for the new user
+            thread = client.beta.threads.create()
+            session_id = thread.id
+            session_reset = True
+            # Reset active entity as well
+            if session_id in last_active_entities:
+                del last_active_entities[session_id]
+        
+        # Store Reference 
+        if session_id and session_id not in session_speakers and current_wave is not None:
+             if current_duration > 1.5:
+                 print(f"Locking new speaker reference for session {session_id}")
                  session_speakers[session_id] = current_wave
-            elif current_wave is not None:
-                 print(f"Audio too short ({current_duration:.2f}s) to lock reference.")
-        else:
-            print(f"Continuing session: {session_id}")
-            
-            # Late-locking if needed
-            if session_id not in session_speakers and current_wave is not None and current_duration > 1.5:
-                print(f"Late-locking speaker reference for session {session_id}")
-                session_speakers[session_id] = current_wave
-                
-            client.beta.threads.messages.create(
-                thread_id=session_id,
-                role="user",
-                content=user_content
-            )
-            run = client.beta.threads.runs.create(
-                thread_id=session_id,
-                assistant_id=assistant.id
-            )
 
+    # 2. Fast Context Injection
+    extract_and_track_entity(question, session_id)
+    search_query = question
+    if session_id in last_active_entities:
+        entity = last_active_entities[session_id]
+        if entity not in question.lower():
+            search_query = f"{entity} {question}"
+            print(f"Context injected: '{question}' -> '{search_query}'")
+
+    # 3. Retrieve Context
+    context_start = time.time()
+    context = retrieve_context(search_query)
+    print(f"Retrieval took: {time.time() - context_start:.2f}s")
+
+    # 4. Add User Message to Thread
+    # We inject context into this message
+    user_message_content = f"Context:\n{context}\n\nQuestion:\n{question}"
+    
+    try:
+        client.beta.threads.messages.create(
+            thread_id=session_id,
+            role="user",
+            content=user_message_content
+        )
+
+        # 5. Run Assistant
+        llm_start = time.time()
+        run = client.beta.threads.runs.create(
+            thread_id=session_id,
+            assistant_id=assistant.id
+        )
+
+        # Polling Loop
         while True:
             run_status = client.beta.threads.runs.retrieve(thread_id=session_id, run_id=run.id)
             if run_status.status == 'completed':
@@ -308,6 +319,7 @@ def chat():
                 return jsonify({"error": f"Run failed with status: {run_status.status}"}), 500
             time.sleep(0.5)
 
+        # 6. Retrieve Answer
         messages = client.beta.threads.messages.list(thread_id=session_id)
         answer = ""
         for msg in messages.data:
@@ -318,12 +330,25 @@ def chat():
                 break
         
         answer = answer.replace("*", "").strip()
-        audio_b64_response = generate_audio(answer, voice=voice)
+        print(f"LLM (Assistant) took: {time.time() - llm_start:.2f}s")
+        
+        # 7. Async TTS Generation
+        # Generate a unique filename
+        filename = f"{session_id}_{int(time.time())}.mp3"
+        audio_url = f"/static/audio/{filename}"
+        
+        # Start thread
+        thread = threading.Thread(target=generate_audio_file, args=(answer, filename, voice))
+        thread.start()
+
+        total_time = time.time() - request_start
+        print(f"Total Request Latency: {total_time:.2f}s (Text Only)")
 
         return jsonify({
             "answer": answer,
             "session_id": session_id,
-            "audio": audio_b64_response
+            "audio_url": audio_url,
+            "session_reset": session_reset
         })
 
     except Exception as e:

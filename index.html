@@ -464,10 +464,48 @@
     }
 
     // --- Interaction ---
-    function playAudio(base64Audio) {
+    async function playAudio(source) {
       audioPlayer.pause();
       audioPlayer.currentTime = 0;
-      audioPlayer.src = "data:audio/mp3;base64," + base64Audio;
+
+      // Determine if source is Base64 or URL
+      if (source.startsWith("http") || source.startsWith("/")) {
+        // Resolve full URL if relative path
+        let fullUrl = source;
+        if (source.startsWith("/")) {
+          const backendBase = window.location.origin.startsWith("http") && !window.location.origin.includes("null") && window.location.port !== "5500"
+            ? window.location.origin
+            : "http://127.0.0.1:5000";
+          fullUrl = backendBase + source;
+        }
+
+        let attempts = 0;
+        const checkFile = async () => {
+          try {
+            const res = await fetch(fullUrl, { method: 'HEAD' });
+            if (res.ok) {
+              audioPlayer.src = fullUrl;
+              startPlayback();
+            } else if (attempts < 20) {
+              attempts++;
+              console.log(`Waiting for audio... (${attempts})`);
+              setTimeout(checkFile, 500);
+            } else {
+              console.log("Audio timed out.");
+            }
+          } catch (e) {
+            console.log("Audio check error:", e);
+          }
+        };
+        checkFile();
+      } else {
+        // Base64 fallback
+        audioPlayer.src = "data:audio/mp3;base64," + source;
+        startPlayback();
+      }
+    }
+
+    function startPlayback() {
       audioPlayer.onplay = () => setSpeaking(true);
       audioPlayer.onended = () => setSpeaking(false);
       audioPlayer.play().catch(e => console.log("Playback error:", e));
@@ -502,10 +540,17 @@
 
         setThinking(false);
         if (data.answer) {
+          if (data.session_reset) {
+            // Notify user of reset
+            activeQuestion.innerText += " (New Voice Detected - Session Reset)";
+          }
           sessionId = data.session_id || sessionId;
           document.getElementById('response-container').innerText = data.answer;
           document.getElementById('response-container').style.display = "block";
-          if (data.audio) {
+
+          if (data.audio_url) {
+            playAudio(data.audio_url);
+          } else if (data.audio) {
             playAudio(data.audio);
           }
         }
@@ -563,8 +608,16 @@
       if (SpeechRecognition && navigator.mediaDevices) {
         const rec = new SpeechRecognition();
         rec.lang = "en-IN";
+        rec.continuous = true;
+        rec.interimResults = true;
 
         let audioContext, processor, input, leftChannel = [], transcript = "";
+        let silenceTimer = null;
+
+        function stopAndSubmit() {
+          if (silenceTimer) clearTimeout(silenceTimer);
+          rec.stop();
+        }
 
         function encodeWAV(samples) {
           let buffer = new ArrayBuffer(44 + samples.length * 2);
@@ -595,6 +648,7 @@
           micBtn.classList.add('listening');
           updateStatus("Listening...");
           leftChannel = [];
+          transcript = "";
           navigator.mediaDevices.getUserMedia({ audio: true }).then(stream => {
             audioContext = new (window.AudioContext || window.webkitAudioContext)({ sampleRate: 16000 });
             input = audioContext.createMediaStreamSource(stream);
@@ -606,9 +660,15 @@
             rec.onend = () => {
               micBtn.classList.remove('listening');
               updateStatus("Processing...");
-              processor.disconnect(); input.disconnect();
-              stream.getTracks().forEach(t => t.stop());
-              audioContext.close();
+              if (processor) processor.disconnect();
+              if (input) input.disconnect();
+              if (stream) stream.getTracks().forEach(t => t.stop());
+              if (audioContext) audioContext.close();
+
+              if (!transcript.trim()) {
+                updateStatus("Idle");
+                return;
+              }
 
               let flattened = new Float32Array(leftChannel.reduce((acc, c) => acc + c.length, 0));
               let offset = 0;
@@ -625,13 +685,32 @@
           }).catch(e => { console.error("Mic Error:", e); updateStatus("Mic Error"); });
         };
 
-        rec.onresult = (e) => { transcript = e.results[0][0].transcript; };
-        rec.onerror = () => { micBtn.classList.remove('listening'); updateStatus("Mic Error"); };
+        rec.onresult = (e) => {
+          let interim = "";
+          for (let i = e.resultIndex; i < e.results.length; ++i) {
+            if (e.results[i].isFinal) {
+              transcript += e.results[i][0].transcript;
+            } else {
+              interim += e.results[i][0].transcript;
+            }
+          }
+          activeQuestion.innerText = transcript + interim; // Show live text
+
+          // Re-arm silence timer (Debounce)
+          if (silenceTimer) clearTimeout(silenceTimer);
+          silenceTimer = setTimeout(stopAndSubmit, 2000); // 2 seconds silence to submit
+        };
+
+        rec.onerror = (e) => {
+          console.log("Speech error:", e);
+          micBtn.classList.remove('listening');
+          updateStatus("Idle");
+        };
 
         micBtn.onclick = () => {
           if (!audioPlayer.paused) { audioPlayer.pause(); setSpeaking(false); }
           transcript = "";
-          rec.start();
+          try { rec.start(); } catch (e) { }
         };
       } else {
         micBtn.style.display = 'none';
