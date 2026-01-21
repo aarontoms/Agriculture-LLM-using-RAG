@@ -3,3 +3,4 @@ venv
 __pycache__
 pretrained_models
 static/audio
+backup.py
