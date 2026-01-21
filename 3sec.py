@@ -207,29 +207,36 @@ def retrieve_context(question, k=3):
         print(f"Retrieval error: {e}")
         return ""
 
-# Store last mentioned entity for each session to improve RAG: { session_id: "mushroom" }
-last_active_entities = {}
+# Store ALL mentioned entities for each session: { session_id: {"mushroom", "disease"} }
+session_keywords = {}
 
 def extract_and_track_entity(text, session_id):
     """
-    Simple keyword extraction to track the current subject (e.g., 'mushroom', 'tomato').
-    This avoids using an LLM to rewrite queries.
+    Scans for keywords and adds them to the session's context history.
     """
-    # Common agricultural entities in Kerala/General context
+    if session_id not in session_keywords:
+        session_keywords[session_id] = set()
+
+    # Common agricultural entities/topics
     keywords = [
         "mushroom", "paddy", "rice", "banana", "coconut", "arecanut", 
         "pepper", "cardamom", "ginger", "turmeric", "rubber", "tea", "coffee",
         "vegetable", "tomato", "chilli", "brinjal", "cow", "goat", "chicken",
         "fertilizer", "manure", "soil", "irrigation", "corn", "maize", "wheat",
-        "sugarcane", "cassava", "yam", "pulses", "pest", "disease",
+        "sugarcane", "cassava", "yam", "pulses", "pest", "disease", "fungus",
+        "insect", "water", "climate", "planting", "harvest", "pesticide", "herbicide",
     ]
     
     text_lower = text.lower()
     for word in keywords:
         if word in text_lower:
-            last_active_entities[session_id] = word
-            return
-    # If no new entity found, we keep the previous one in the global dict
+            session_keywords[session_id].add(word)
+            # Limit to last 5 keywords to keep it relevant
+            if len(session_keywords[session_id]) > 5:
+                 session_keywords[session_id].pop()
+            print(f"Updated Session Context: {session_keywords[session_id]}")
+
+
 
 @app.route("/ask", methods=["POST"])
 def chat():
@@ -261,8 +268,8 @@ def chat():
             # Clear history but keep system prompt
             conversation_history[session_id] = [{"role": "system", "content": INSTRUCTION}]
             # Reset active entity as well since it's a new user
-            if session_id in last_active_entities:
-                del last_active_entities[session_id]
+            if session_id in session_keywords:
+                del session_keywords[session_id]
             session_reset = True
         
         # Store Reference if missing (First interaction or after reset)
@@ -278,13 +285,12 @@ def chat():
     extract_and_track_entity(question, session_id)
     
     search_query = question
-    # If we have a stored entity, prepend it to help FAISS find relevant chunks
-    # But only if the question doesn't already contain it
-    if session_id in last_active_entities:
-        entity = last_active_entities[session_id]
-        if entity not in question.lower():
-            search_query = f"{entity} {question}"
-            print(f"Context injected: '{question}' -> '{search_query}'")
+    # Prepend ALL accumulated context keywords
+    if session_id in session_keywords and session_keywords[session_id]:
+        # Sort for consistency
+        context_tags = " ".join(sorted(session_keywords[session_id]))
+        search_query = f"{context_tags} {question}"
+        print(f"Context injected: '{question}' -> '{search_query}'")
 
     # 4. Retrieve Context
     context_start = time.time()
@@ -300,7 +306,7 @@ def chat():
 
     # Keep history manageable (System + last 6 messages)
     if len(conversation_history[session_id]) > 7:
-        conversation_history[session_id] = [conversation_history[session_id][0]] + conversation_history[session_id][-6:]
+        conversation_history[session_id] = [conversation_history[session_id][0]] + conversation_history[session_id][-8:]
 
     try:
         # 6. Chat Completion

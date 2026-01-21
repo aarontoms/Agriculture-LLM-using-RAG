@@ -227,7 +227,8 @@ def extract_and_track_entity(text, session_id):
         "pepper", "cardamom", "ginger", "turmeric", "rubber", "tea", "coffee",
         "vegetable", "tomato", "chilli", "brinjal", "cow", "goat", "chicken",
         "fertilizer", "manure", "soil", "irrigation", "corn", "maize", "wheat",
-        "sugarcane", "cassava", "yam", "pulses", "pest", "disease",
+        "sugarcane", "cassava", "yam", "pulses", "pest", "disease", "fungus",
+        "insect", "water", "climate", "planting", "harvest", "pesticide", "herbicide",
     ]
     
     text_lower = text.lower()
