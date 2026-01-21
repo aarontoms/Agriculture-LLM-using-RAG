@@ -141,7 +141,9 @@
       padding: 25px;
       border-radius: 20px;
       color: var(--text-color);
-      text-align: center;
+      text-align: left;
+      white-space: pre-wrap;
+      word-wrap: break-word;
       font-size: 1.15rem;
       line-height: 1.6;
       display: none;
@@ -235,6 +237,30 @@
     }
 
     /* Mobile */
+    #toast {
+      position: fixed;
+      top: 20px;
+      left: 50%;
+      transform: translateX(-50%) translateY(-50px);
+      background: rgba(255, 77, 77, 0.9);
+      color: white;
+      padding: 12px 24px;
+      border-radius: 50px;
+      font-size: 1rem;
+      font-weight: 600;
+      box-shadow: 0 4px 15px rgba(255, 77, 77, 0.3);
+      z-index: 1000;
+      opacity: 0;
+      transition: all 0.4s ease;
+      pointer-events: none;
+    }
+
+    #toast.show {
+      transform: translateX(-50%) translateY(0);
+      opacity: 1;
+    }
+
+    /* Mobile */
     @media (max-width: 768px) {
       .eyes-wrapper {
         gap: 40px;
@@ -255,6 +281,7 @@
 
 <body>
 
+  <div id="toast"></div>
   <div id="active-question"></div>
   <div id="status-indicator">Idle</div>
 
@@ -505,15 +532,38 @@
       }
     }
 
+    function typeWriter(text, element, speed = 25) {
+      element.textContent = "";
+      let i = 0;
+      function type() {
+        if (i < text.length) {
+          element.textContent += text.charAt(i);
+          i++;
+          setTimeout(type, speed);
+        }
+      }
+      type();
+    }
+
     function startPlayback() {
       audioPlayer.onplay = () => setSpeaking(true);
       audioPlayer.onended = () => setSpeaking(false);
       audioPlayer.play().catch(e => console.log("Playback error:", e));
     }
 
+    function showToast(message) {
+      const toast = document.getElementById('toast');
+      toast.innerText = message;
+      toast.classList.add('show');
+      setTimeout(() => {
+        toast.classList.remove('show');
+      }, 3000);
+    }
+
     async function ask(query, audioB64 = null) {
       if (!query.trim()) return;
-      audioPlayer.pause(); // Stop talking if the user types/sends
+      // ... existing ask setup ...
+      audioPlayer.pause();
       setSpeaking(false);
       resetIdleTimer();
       setThinking(true);
@@ -541,12 +591,12 @@
         setThinking(false);
         if (data.answer) {
           if (data.session_reset) {
-            // Notify user of reset
-            activeQuestion.innerText += " (New Voice Detected - Session Reset)";
+            showToast("New Voice Detected - Session Reset");
           }
           sessionId = data.session_id || sessionId;
-          document.getElementById('response-container').innerText = data.answer;
-          document.getElementById('response-container').style.display = "block";
+          const responseContainer = document.getElementById('response-container');
+          responseContainer.style.display = "block";
+          typeWriter(data.answer, responseContainer);
 
           if (data.audio_url) {
             playAudio(data.audio_url);
@@ -608,16 +658,8 @@
       if (SpeechRecognition && navigator.mediaDevices) {
         const rec = new SpeechRecognition();
         rec.lang = "en-IN";
-        rec.continuous = true;
-        rec.interimResults = true;
 
         let audioContext, processor, input, leftChannel = [], transcript = "";
-        let silenceTimer = null;
-
-        function stopAndSubmit() {
-          if (silenceTimer) clearTimeout(silenceTimer);
-          rec.stop();
-        }
 
         function encodeWAV(samples) {
           let buffer = new ArrayBuffer(44 + samples.length * 2);
@@ -686,19 +728,8 @@
         };
 
         rec.onresult = (e) => {
-          let interim = "";
-          for (let i = e.resultIndex; i < e.results.length; ++i) {
-            if (e.results[i].isFinal) {
-              transcript += e.results[i][0].transcript;
-            } else {
-              interim += e.results[i][0].transcript;
-            }
-          }
-          activeQuestion.innerText = transcript + interim; // Show live text
-
-          // Re-arm silence timer (Debounce)
-          if (silenceTimer) clearTimeout(silenceTimer);
-          silenceTimer = setTimeout(stopAndSubmit, 2000); // 2 seconds silence to submit
+          transcript = e.results[0][0].transcript;
+          activeQuestion.innerText = transcript;
         };
 
         rec.onerror = (e) => {
